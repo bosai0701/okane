@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>カメラ映像共有</title>
+</head>
+<body>
+    <h1>カメラ映像を共有</h1>
+    <button id="startCamera">カメラ開始</button>
+    <button id="startConnection">接続</button>
+    <video id="localVideo" autoplay playsinline></video>
+    <video id="remoteVideo" autoplay playsinline></video>
+    
+    <script>
+        const localVideo = document.getElementById("localVideo");
+        const remoteVideo = document.getElementById("remoteVideo");
+        const startButton = document.getElementById("startCamera");
+        const connectButton = document.getElementById("startConnection");
+
+        let localStream;
+        let peerConnection;
+        let socket = new WebSocket("wss://your-websocket-server.com"); // WebSocketサーバーを用意
+
+        const config = {
+            iceServers: [{ urls: "stun:stun.l.google.com:19302" }] // STUNサーバーでNAT超え
+        };
+
+        startButton.onclick = async () => {
+            localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            localVideo.srcObject = localStream;
+        };
+
+        connectButton.onclick = async () => {
+            peerConnection = new RTCPeerConnection(config);
+            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.send(JSON.stringify({ type: "candidate", candidate: event.candidate }));
+                }
+            };
+
+            peerConnection.ontrack = (event) => {
+                remoteVideo.srcObject = event.streams[0];
+            };
+
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            socket.send(JSON.stringify({ type: "offer", sdp: offer.sdp }));
+        };
+
+        socket.onmessage = async (event) => {
+            const message = JSON.parse(event.data);
+
+            if (message.type === "offer") {
+                peerConnection = new RTCPeerConnection(config);
+                peerConnection.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        socket.send(JSON.stringify({ type: "candidate", candidate: event.candidate }));
+                    }
+                };
+                peerConnection.ontrack = (event) => {
+                    remoteVideo.srcObject = event.streams[0];
+                };
+
+                await peerConnection.setRemoteDescription(new RTCSessionDescription({ type: "offer", sdp: message.sdp }));
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                socket.send(JSON.stringify({ type: "answer", sdp: answer.sdp }));
+            }
+
+            if (message.type === "answer") {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription({ type: "answer", sdp: message.sdp }));
+            }
+
+            if (message.type === "candidate") {
+                await peerConnection.addIceCandidate(new RTCIceCandidate(message.candidate));
+            }
+        };
+    </script>
+</body>
+</html>
